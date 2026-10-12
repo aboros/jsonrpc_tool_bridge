@@ -1,0 +1,32 @@
+jsonrpc_tool_bridge.jsonrpc_tool_config.*:
+  type: config_entity
+  label: 'JSON-RPC Tool Configuration'
+  mapping:
+    id:
+      type: string
+      label: 'Machine name'
+      constraints:
+        NotBlank: []
+        # JSON-RPC puts no limit on method names, so the only cap is the
+        # configuration system's own: a config name is at most 250 characters,
+        # and "jsonrpc_tool_bridge.jsonrpc_tool_config." takes 40 of them.
+        Length:
+          max: 210
+        Regex:
+          pattern: '/^[a-z0-9_]+$/'
+          message: 'The machine name must contain only lowercase letters, numbers, and underscores.'
+    tool_id:
+      type: string
+      label: 'Tool API Tool ID'
+      constraints:
+        NotBlank:
+          message: 'The Tool API Tool ID field is required.'
+        Length:
+          max: 255
+    description:
+      type: text
+      label: 'Description Override'
+      nullable: true
+    status:
+      type: boolean
+      label: 'Enabled'

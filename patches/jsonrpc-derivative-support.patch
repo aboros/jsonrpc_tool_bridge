@@ -1,0 +1,876 @@
+From d8b4d97175c71600c7da3687750c09739bd8110c Mon Sep 17 00:00:00 2001
+From: Adam Boros <hunaboros@gmail.com>
+Date: Mon, 12 Oct 2026 10:16:26 +0200
+Subject: [PATCH 1/3] feat: Support plugin derivers for JSON-RPC methods
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../src/Normalizer/DefinitionNormalizer.php   |  1 +
+ src/Annotation/JsonRpcMethod.php              | 30 ++++++++++++++++++-
+ src/Attribute/JsonRpcMethod.php               |  5 ++++
+ src/JsonRpcMethodDefinition.php               | 25 +++++++++++++++-
+ 4 files changed, 59 insertions(+), 2 deletions(-)
+
+diff --git a/modules/jsonrpc_discovery/src/Normalizer/DefinitionNormalizer.php b/modules/jsonrpc_discovery/src/Normalizer/DefinitionNormalizer.php
+index fb98fda..df85172 100644
+--- a/modules/jsonrpc_discovery/src/Normalizer/DefinitionNormalizer.php
++++ b/modules/jsonrpc_discovery/src/Normalizer/DefinitionNormalizer.php
+@@ -66,6 +66,7 @@ class DefinitionNormalizer extends NormalizerBase {
+         case 'id':
+         case 'call':
+         case 'access':
++        case 'deriver':
+           break;
+ 
+         default:
+diff --git a/src/Annotation/JsonRpcMethod.php b/src/Annotation/JsonRpcMethod.php
+index c33ef85..1c5eac1 100644
+--- a/src/Annotation/JsonRpcMethod.php
++++ b/src/Annotation/JsonRpcMethod.php
+@@ -5,6 +5,7 @@ declare(strict_types=1);
+ namespace Drupal\jsonrpc\Annotation;
+ 
+ use Drupal\Component\Annotation\AnnotationBase;
++use Drupal\Component\Plugin\Definition\DerivablePluginDefinitionInterface;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Access\AccessResultInterface;
+ use Drupal\Core\Annotation\Translation;
+@@ -20,7 +21,7 @@ use Drupal\jsonrpc\MethodInterface;
+  *
+  * @Annotation
+  */
+-class JsonRpcMethod extends AnnotationBase implements MethodInterface {
++class JsonRpcMethod extends AnnotationBase implements MethodInterface, DerivablePluginDefinitionInterface {
+ 
+   /**
+    * The access required to use this RPC method.
+@@ -75,6 +76,16 @@ class JsonRpcMethod extends AnnotationBase implements MethodInterface {
+    */
+   public array $responseHeaders = [];
+ 
++  /**
++   * The name of the deriver of this method, if any.
++   *
++   * Each derivative is exposed as a separate method named
++   * "<id>:<derivative_id>".
++   *
++   * @var class-string|null
++   */
++  public ?string $deriver = NULL;
++
+   /**
+    * {@inheritdoc}
+    */
+@@ -83,6 +94,23 @@ class JsonRpcMethod extends AnnotationBase implements MethodInterface {
+     return $this->getId();
+   }
+ 
++  /**
++   * {@inheritdoc}
++   */
++  #[\Override]
++  public function getDeriver(): ?string {
++    return $this->deriver;
++  }
++
++  /**
++   * {@inheritdoc}
++   */
++  #[\Override]
++  public function setDeriver($deriver): static {
++    $this->deriver = $deriver;
++    return $this;
++  }
++
+   /**
+    * {@inheritdoc}
+    */
+diff --git a/src/Attribute/JsonRpcMethod.php b/src/Attribute/JsonRpcMethod.php
+index a452998..b3f46d5 100644
+--- a/src/Attribute/JsonRpcMethod.php
++++ b/src/Attribute/JsonRpcMethod.php
+@@ -44,6 +44,9 @@ class JsonRpcMethod extends Plugin {
+    *   (Optional.) Key value pairs for setting headers in the response.
+    *   Batch requests will only contain the headers appearing on **all** of the
+    *   responses involved.
++   * @param class-string|null $deriver
++   *   (Optional.) The deriver class. Each derivative is exposed as a separate
++   *   method named "<id>:<derivative_id>".
+    */
+   public function __construct(
+     public readonly string $id,
+@@ -52,6 +55,7 @@ class JsonRpcMethod extends Plugin {
+     public readonly array $access = [],
+     public array|null $params = NULL,
+     public readonly array $responseHeaders = [],
++    public readonly ?string $deriver = NULL,
+   ) {
+   }
+ 
+@@ -67,6 +71,7 @@ class JsonRpcMethod extends Plugin {
+       'access' => $this->access,
+       'params' => $this->params,
+       'responseHeaders' => $this->responseHeaders,
++      'deriver' => $this->deriver,
+     ]);
+   }
+ 
+diff --git a/src/JsonRpcMethodDefinition.php b/src/JsonRpcMethodDefinition.php
+index d1c9c3e..bd06204 100644
+--- a/src/JsonRpcMethodDefinition.php
++++ b/src/JsonRpcMethodDefinition.php
+@@ -4,6 +4,7 @@ declare(strict_types=1);
+ 
+ namespace Drupal\jsonrpc;
+ 
++use Drupal\Component\Plugin\Definition\DerivablePluginDefinitionInterface;
+ use Drupal\Component\Plugin\Definition\PluginDefinition;
+ use Drupal\Core\Access\AccessResult;
+ use Drupal\Core\Access\AccessResultInterface;
+@@ -13,7 +14,7 @@ use Drupal\Core\StringTranslation\TranslatableMarkup;
+ /**
+  * Defines a JSON-RPC method plugin definition.
+  */
+-class JsonRpcMethodDefinition extends PluginDefinition implements MethodInterface {
++class JsonRpcMethodDefinition extends PluginDefinition implements MethodInterface, DerivablePluginDefinitionInterface {
+ 
+   /**
+    * The class method to call.
+@@ -57,6 +58,13 @@ class JsonRpcMethodDefinition extends PluginDefinition implements MethodInterfac
+    */
+   public array $responseHeaders = [];
+ 
++  /**
++   * The name of the deriver of this method definition, if any.
++   *
++   * @var class-string|null
++   */
++  public ?string $deriver = NULL;
++
+   /**
+    * Constructs a new JsonRpcMethodDefinition.
+    *
+@@ -72,6 +80,21 @@ class JsonRpcMethodDefinition extends PluginDefinition implements MethodInterfac
+     }
+   }
+ 
++  /**
++   * {@inheritdoc}
++   */
++  public function getDeriver(): ?string {
++    return $this->deriver;
++  }
++
++  /**
++   * {@inheritdoc}
++   */
++  public function setDeriver($deriver): static {
++    $this->deriver = $deriver;
++    return $this;
++  }
++
+   /**
+    * {@inheritdoc}
+    */
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 39ab328cdb28be982d02133ee1b362d00e9e03b0 Mon Sep 17 00:00:00 2001
+From: Adam Boros <hunaboros@gmail.com>
+Date: Mon, 12 Oct 2026 10:16:39 +0200
+Subject: [PATCH 2/3] feat: Let method definitions carry their own output
+ schema, tag the definition cache
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/Handler.php                     |  8 +++++---
+ src/Plugin/JsonRpcMethodManager.php | 14 ++++++++++----
+ 2 files changed, 15 insertions(+), 7 deletions(-)
+
+diff --git a/src/Handler.php b/src/Handler.php
+index 6dbe292..08b5ea6 100644
+--- a/src/Handler.php
++++ b/src/Handler.php
+@@ -117,10 +117,12 @@ class Handler implements HandlerInterface {
+       $rpc_response = $result instanceof Response
+         ? $result
+         : new Response(static::SUPPORTED_VERSION, $request->id(), $result);
+-      $methodPluginClass = $this->getMethod($request->getMethod())->getClass();
+-      $result_schema = call_user_func([$methodPluginClass, 'outputSchema']);
++      $method = $this->getMethod($request->getMethod());
++      // Derivatives of one class can each describe their own results, so the
++      // definition's schema wins over the class-level one.
++      $result_schema = $method->output ?? call_user_func([$method->getClass(), 'outputSchema']);
+       $rpc_response->setResultSchema($result_schema);
+-      $response_headers = $this->getMethod($request->getMethod())->responseHeaders;
++      $response_headers = $method->responseHeaders;
+       $rpc_response->getHeaders()->add($response_headers);
+ 
+       if (!$context->isEmpty()) {
+diff --git a/src/Plugin/JsonRpcMethodManager.php b/src/Plugin/JsonRpcMethodManager.php
+index 0369988..4204340 100644
+--- a/src/Plugin/JsonRpcMethodManager.php
++++ b/src/Plugin/JsonRpcMethodManager.php
+@@ -40,7 +40,9 @@ class JsonRpcMethodManager extends DefaultPluginManager {
+       JsonRpcMethod::class,
+       JsonRpcMethodAnnotation::class,
+     );
+-    $this->setCacheBackend($cache_backend, 'jsonrpc_plugins');
++    // The cache tag lets derivative sources, such as config entities, expire
++    // the definitions without access to this private service.
++    $this->setCacheBackend($cache_backend, 'jsonrpc_plugins', ['jsonrpc_plugins']);
+   }
+ 
+   /**
+@@ -59,9 +61,13 @@ class JsonRpcMethodManager extends DefaultPluginManager {
+           }
+         }
+       }
+-      $class = $method->getClass();
+-      $output_schema = $class::outputSchema();
+-      $method->output = $output_schema;
++      // A definition that already carries an output schema keeps it, so a
++      // deriver can describe each derivative's results on its own. Every
++      // other definition falls back to the class-level schema.
++      if ($method->output === NULL) {
++        $class = $method->getClass();
++        $method->output = $class::outputSchema();
++      }
+     }
+     parent::alterDefinitions($definitions);
+   }
+-- 
+2.50.1 (Apple Git-155)
+
+
+From bd87759f143e29d0f2b4d973caa3dc0a9c2ffa7a Mon Sep 17 00:00:00 2001
+From: Adam Boros <hunaboros@gmail.com>
+Date: Mon, 12 Oct 2026 10:21:44 +0200
+Subject: [PATCH 3/3] test: Cover derived methods, refresh definitions on cache
+ tag invalidation
+
+Keeps the deriver property protected on JsonRpcMethodDefinition, since
+DerivativeDiscoveryDecorator reads a public one through an array cast and
+then expects a public id. Resets the in-memory definitions when the
+jsonrpc_plugins tag is invalidated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ jsonrpc.services.yml                          |   2 +
+ src/Annotation/JsonRpcMethod.php              |   5 +-
+ src/JsonRpcMethodDefinition.php               |   5 +-
+ src/Plugin/JsonRpcMethodManager.php           |  23 +-
+ .../Derivative/DerivedMethodDeriver.php       |  54 ++++
+ .../Plugin/jsonrpc/Method/DerivedMethod.php   |  44 ++++
+ .../Derivative/DerivedMethodDeriver.php       |  93 +++++++
+ .../Plugin/jsonrpc/Method/DerivedMethod.php   |  47 ++++
+ tests/src/Kernel/DerivativeMethodTest.php     | 234 ++++++++++++++++++
+ 9 files changed, 502 insertions(+), 5 deletions(-)
+ create mode 100644 tests/modules/jsonrpc_test_annotations/src/Plugin/Derivative/DerivedMethodDeriver.php
+ create mode 100644 tests/modules/jsonrpc_test_annotations/src/Plugin/jsonrpc/Method/DerivedMethod.php
+ create mode 100644 tests/modules/jsonrpc_test_attributes/src/Plugin/Derivative/DerivedMethodDeriver.php
+ create mode 100644 tests/modules/jsonrpc_test_attributes/src/Plugin/jsonrpc/Method/DerivedMethod.php
+ create mode 100644 tests/src/Kernel/DerivativeMethodTest.php
+
+diff --git a/jsonrpc.services.yml b/jsonrpc.services.yml
+index 075178a..d336284 100644
+--- a/jsonrpc.services.yml
++++ b/jsonrpc.services.yml
+@@ -6,6 +6,8 @@ services:
+     parent: default_plugin_manager
+     class: Drupal\jsonrpc\Plugin\JsonRpcMethodManager
+     public: false
++    tags:
++      - { name: cache_tags_invalidator }
+   jsonrpc.handler:
+     class: Drupal\jsonrpc\Handler
+     arguments:
+diff --git a/src/Annotation/JsonRpcMethod.php b/src/Annotation/JsonRpcMethod.php
+index 1c5eac1..99fe668 100644
+--- a/src/Annotation/JsonRpcMethod.php
++++ b/src/Annotation/JsonRpcMethod.php
+@@ -80,9 +80,10 @@ class JsonRpcMethod extends AnnotationBase implements MethodInterface, Derivable
+    * The name of the deriver of this method, if any.
+    *
+    * Each derivative is exposed as a separate method named
+-   * "<id>:<derivative_id>".
++   * "<id>:<derivative_id>". The annotation parser checks values against this
++   * type and supports neither unions nor class-string.
+    *
+-   * @var class-string|null
++   * @var string
+    */
+   public ?string $deriver = NULL;
+ 
+diff --git a/src/JsonRpcMethodDefinition.php b/src/JsonRpcMethodDefinition.php
+index bd06204..4e50911 100644
+--- a/src/JsonRpcMethodDefinition.php
++++ b/src/JsonRpcMethodDefinition.php
+@@ -61,9 +61,12 @@ class JsonRpcMethodDefinition extends PluginDefinition implements MethodInterfac
+   /**
+    * The name of the deriver of this method definition, if any.
+    *
++   * Not public: DerivativeDiscoveryDecorator::getDeriverClass() reads a
++   * public "deriver" through an array cast and then expects a public "id".
++   *
+    * @var class-string|null
+    */
+-  public ?string $deriver = NULL;
++  protected ?string $deriver = NULL;
+ 
+   /**
+    * Constructs a new JsonRpcMethodDefinition.
+diff --git a/src/Plugin/JsonRpcMethodManager.php b/src/Plugin/JsonRpcMethodManager.php
+index 4204340..607f659 100644
+--- a/src/Plugin/JsonRpcMethodManager.php
++++ b/src/Plugin/JsonRpcMethodManager.php
+@@ -7,6 +7,7 @@ namespace Drupal\jsonrpc\Plugin;
+ use Drupal\Component\Plugin\Exception\InvalidPluginDefinitionException;
+ use Drupal\jsonrpc\Annotation\JsonRpcMethod as JsonRpcMethodAnnotation;
+ use Drupal\Core\Cache\CacheBackendInterface;
++use Drupal\Core\Cache\CacheTagsInvalidatorInterface;
+ use Drupal\Core\Extension\ModuleHandlerInterface;
+ use Drupal\Core\Plugin\DefaultPluginManager;
+ use Drupal\jsonrpc\Attribute\JsonRpcMethod;
+@@ -18,7 +19,12 @@ use Drupal\jsonrpc\ParameterFactoryInterface;
+  *
+  * @internal
+  */
+-class JsonRpcMethodManager extends DefaultPluginManager {
++class JsonRpcMethodManager extends DefaultPluginManager implements CacheTagsInvalidatorInterface {
++
++  /**
++   * The cache tag of the method definitions.
++   */
++  public const string CACHE_TAG = 'jsonrpc_plugins';
+ 
+   /**
+    * Constructs a JsonRpcMethodManager object.
+@@ -42,7 +48,20 @@ class JsonRpcMethodManager extends DefaultPluginManager {
+     );
+     // The cache tag lets derivative sources, such as config entities, expire
+     // the definitions without access to this private service.
+-    $this->setCacheBackend($cache_backend, 'jsonrpc_plugins', ['jsonrpc_plugins']);
++    $this->setCacheBackend($cache_backend, 'jsonrpc_plugins', [static::CACHE_TAG]);
++  }
++
++  /**
++   * {@inheritdoc}
++   *
++   * Invalidating the tag also drops the definitions this request already
++   * loaded, so a changed set of derivatives is visible right away.
++   */
++  #[\Override]
++  public function invalidateTags(array $tags): void {
++    if (in_array(static::CACHE_TAG, $tags, TRUE)) {
++      $this->definitions = NULL;
++    }
+   }
+ 
+   /**
+diff --git a/tests/modules/jsonrpc_test_annotations/src/Plugin/Derivative/DerivedMethodDeriver.php b/tests/modules/jsonrpc_test_annotations/src/Plugin/Derivative/DerivedMethodDeriver.php
+new file mode 100644
+index 0000000..7d84bf5
+--- /dev/null
++++ b/tests/modules/jsonrpc_test_annotations/src/Plugin/Derivative/DerivedMethodDeriver.php
+@@ -0,0 +1,54 @@
++<?php
++
++declare(strict_types=1);
++
++namespace Drupal\jsonrpc_test_annotations\Plugin\Derivative;
++
++use Drupal\Component\Plugin\Derivative\DeriverBase;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Drupal\jsonrpc\Annotation\JsonRpcMethod;
++use Drupal\jsonrpc\Attribute\JsonRpcParameterDefinition;
++use Drupal\jsonrpc\JsonRpcMethodDefinition;
++
++/**
++ * Derives two methods with their own parameters and output schemas.
++ */
++final class DerivedMethodDeriver extends DeriverBase {
++
++  /**
++   * {@inheritdoc}
++   */
++  #[\Override]
++  public function getDerivativeDefinitions($base_plugin_definition): array {
++    assert($base_plugin_definition instanceof JsonRpcMethod);
++    $base = [
++      'class' => $base_plugin_definition->getClass(),
++      'provider' => $base_plugin_definition->getProvider(),
++      'access' => $base_plugin_definition->access,
++    ];
++    $this->derivatives = [
++      'echo' => new JsonRpcMethodDefinition($base + [
++        'id' => $base_plugin_definition->id() . ':echo',
++        'usage' => new TranslatableMarkup('Echoes the text.'),
++        'params' => [
++          'text' => new JsonRpcParameterDefinition('text', ['type' => 'string'], required: TRUE),
++        ],
++        'output' => [
++          'type' => 'object',
++          'properties' => ['echo' => ['type' => 'string']],
++          'required' => ['echo'],
++        ],
++      ]),
++      'double' => new JsonRpcMethodDefinition($base + [
++        'id' => $base_plugin_definition->id() . ':double',
++        'usage' => new TranslatableMarkup('Doubles the number.'),
++        'params' => [
++          'number' => new JsonRpcParameterDefinition('number', ['type' => 'integer'], required: TRUE),
++        ],
++        'output' => ['type' => 'integer'],
++      ]),
++    ];
++    return $this->derivatives;
++  }
++
++}
+diff --git a/tests/modules/jsonrpc_test_annotations/src/Plugin/jsonrpc/Method/DerivedMethod.php b/tests/modules/jsonrpc_test_annotations/src/Plugin/jsonrpc/Method/DerivedMethod.php
+new file mode 100644
+index 0000000..6587d9a
+--- /dev/null
++++ b/tests/modules/jsonrpc_test_annotations/src/Plugin/jsonrpc/Method/DerivedMethod.php
+@@ -0,0 +1,44 @@
++<?php
++
++declare(strict_types=1);
++
++namespace Drupal\jsonrpc_test_annotations\Plugin\jsonrpc\Method;
++
++use Drupal\jsonrpc\JsonRpcObject\ParameterBag;
++use Drupal\jsonrpc\Plugin\JsonRpcMethodBase;
++
++/**
++ * Derived test method.
++ *
++ * @JsonRpcMethod(
++ *   id = "derived.test.annotations",
++ *   usage = @Translation("Derived test method."),
++ *   access = {"access content"},
++ *   deriver = "Drupal\jsonrpc_test_annotations\Plugin\Derivative\DerivedMethodDeriver",
++ * )
++ */
++class DerivedMethod extends JsonRpcMethodBase {
++
++  /**
++   * {@inheritdoc}
++   */
++  #[\Override]
++  public function execute(ParameterBag $params): array|int {
++    return match ($this->getDerivativeId()) {
++      'echo' => ['echo' => $params->get('text')],
++      default => 2 * $params->get('number'),
++    };
++  }
++
++  /**
++   * {@inheritdoc}
++   */
++  #[\Override]
++  public static function outputSchema(): array {
++    // Only describes the base definition. Each derivative brings its own.
++    return [
++      'type' => 'null',
++    ];
++  }
++
++}
+diff --git a/tests/modules/jsonrpc_test_attributes/src/Plugin/Derivative/DerivedMethodDeriver.php b/tests/modules/jsonrpc_test_attributes/src/Plugin/Derivative/DerivedMethodDeriver.php
+new file mode 100644
+index 0000000..4250d5e
+--- /dev/null
++++ b/tests/modules/jsonrpc_test_attributes/src/Plugin/Derivative/DerivedMethodDeriver.php
+@@ -0,0 +1,93 @@
++<?php
++
++declare(strict_types=1);
++
++namespace Drupal\jsonrpc_test_attributes\Plugin\Derivative;
++
++use Drupal\Component\Plugin\Derivative\DeriverBase;
++use Drupal\Core\Plugin\Discovery\ContainerDeriverInterface;
++use Drupal\Core\State\StateInterface;
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Drupal\jsonrpc\Attribute\JsonRpcParameterDefinition;
++use Drupal\jsonrpc\JsonRpcMethodDefinition;
++use Symfony\Component\DependencyInjection\ContainerInterface;
++
++/**
++ * Derives one method per derivative ID listed in state.
++ *
++ * Each derivative has its own parameters and output schema, so tests can tell
++ * them apart from each other and from the class-level schema.
++ */
++final class DerivedMethodDeriver extends DeriverBase implements ContainerDeriverInterface {
++
++  /**
++   * The state key listing the derivative IDs.
++   */
++  public const string STATE_KEY = 'jsonrpc_test_attributes.derivatives';
++
++  public function __construct(
++    private readonly StateInterface $state,
++  ) {}
++
++  /**
++   * {@inheritdoc}
++   */
++  #[\Override]
++  public static function create(ContainerInterface $container, $base_plugin_id): static {
++    return new static($container->get('state'));
++  }
++
++  /**
++   * {@inheritdoc}
++   */
++  #[\Override]
++  public function getDerivativeDefinitions($base_plugin_definition): array {
++    assert($base_plugin_definition instanceof JsonRpcMethodDefinition);
++    $this->derivatives = [];
++    foreach ($this->state->get(self::STATE_KEY, ['echo', 'double']) as $derivative_id) {
++      $this->derivatives[$derivative_id] = new JsonRpcMethodDefinition([
++        'id' => $base_plugin_definition->id() . ':' . $derivative_id,
++        'class' => $base_plugin_definition->getClass(),
++        'provider' => $base_plugin_definition->getProvider(),
++        'usage' => new TranslatableMarkup('Derived method @id.', ['@id' => $derivative_id]),
++        'access' => $base_plugin_definition->access,
++      ] + self::specification($derivative_id));
++    }
++    return $this->derivatives;
++  }
++
++  /**
++   * Returns the parameters and output schema of a derivative.
++   *
++   * @param string $derivative_id
++   *   The derivative ID.
++   *
++   * @return array{params: array<string, \Drupal\jsonrpc\Attribute\JsonRpcParameterDefinition>|null, output: array<string, mixed>}
++   *   The definition values that differ between derivatives.
++   */
++  public static function specification(string $derivative_id): array {
++    return match ($derivative_id) {
++      'echo' => [
++        'params' => [
++          'text' => new JsonRpcParameterDefinition('text', ['type' => 'string'], required: TRUE),
++        ],
++        'output' => [
++          'type' => 'object',
++          'properties' => ['echo' => ['type' => 'string']],
++          'required' => ['echo'],
++        ],
++      ],
++      'double' => [
++        'params' => [
++          'number' => new JsonRpcParameterDefinition('number', ['type' => 'integer'], required: TRUE),
++        ],
++        'output' => ['type' => 'integer'],
++      ],
++      default => [
++        'params' => NULL,
++        'output' => ['type' => 'string'],
++      ],
++    };
++  }
++
++}
+diff --git a/tests/modules/jsonrpc_test_attributes/src/Plugin/jsonrpc/Method/DerivedMethod.php b/tests/modules/jsonrpc_test_attributes/src/Plugin/jsonrpc/Method/DerivedMethod.php
+new file mode 100644
+index 0000000..4a5d558
+--- /dev/null
++++ b/tests/modules/jsonrpc_test_attributes/src/Plugin/jsonrpc/Method/DerivedMethod.php
+@@ -0,0 +1,47 @@
++<?php
++
++declare(strict_types=1);
++
++namespace Drupal\jsonrpc_test_attributes\Plugin\jsonrpc\Method;
++
++use Drupal\Core\StringTranslation\TranslatableMarkup;
++use Drupal\jsonrpc\Attribute\JsonRpcMethod;
++use Drupal\jsonrpc\JsonRpcObject\ParameterBag;
++use Drupal\jsonrpc\Plugin\JsonRpcMethodBase;
++use Drupal\jsonrpc_test_attributes\Plugin\Derivative\DerivedMethodDeriver;
++
++/**
++ * Derived test method.
++ */
++#[JsonRpcMethod(
++  id: "derived.test.attributes",
++  usage: new TranslatableMarkup("Derived test method."),
++  access: ["access content"],
++  deriver: DerivedMethodDeriver::class,
++)]
++class DerivedMethod extends JsonRpcMethodBase {
++
++  /**
++   * {@inheritdoc}
++   */
++  #[\Override]
++  public function execute(ParameterBag $params): array|int|string {
++    return match ($this->getDerivativeId()) {
++      'echo' => ['echo' => $params->get('text')],
++      'double' => 2 * $params->get('number'),
++      default => (string) $this->getDerivativeId(),
++    };
++  }
++
++  /**
++   * {@inheritdoc}
++   */
++  #[\Override]
++  public static function outputSchema(): array {
++    // Only describes the base definition. Each derivative brings its own.
++    return [
++      'type' => 'null',
++    ];
++  }
++
++}
+diff --git a/tests/src/Kernel/DerivativeMethodTest.php b/tests/src/Kernel/DerivativeMethodTest.php
+new file mode 100644
+index 0000000..a453576
+--- /dev/null
++++ b/tests/src/Kernel/DerivativeMethodTest.php
+@@ -0,0 +1,234 @@
++<?php
++
++declare(strict_types=1);
++
++namespace Drupal\Tests\jsonrpc\Kernel;
++
++use Drupal\Component\Serialization\Json;
++use Drupal\Core\Cache\Cache;
++use Drupal\Core\DependencyInjection\ContainerBuilder;
++use Drupal\Core\Session\UserSession;
++use Drupal\KernelTests\KernelTestBase;
++use Drupal\jsonrpc\Controller\HttpController;
++use Drupal\jsonrpc\HandlerInterface;
++use Drupal\jsonrpc\JsonRpcMethodDefinition;
++use Drupal\jsonrpc\JsonRpcObject\ParameterBag;
++use Drupal\jsonrpc\JsonRpcObject\Request as RpcRequest;
++use Drupal\jsonrpc_test_attributes\Plugin\Derivative\DerivedMethodDeriver;
++use PHPUnit\Framework\Attributes\DataProvider;
++use PHPUnit\Framework\Attributes\Group;
++use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
++use Symfony\Component\HttpFoundation\Request;
++use Symfony\Component\HttpFoundation\Response;
++
++/**
++ * Tests methods emitted by a plugin deriver.
++ *
++ * Each derivative is a method of its own, with its own parameters and output
++ * schema, and the result of a call is checked against the derivative's schema
++ * rather than the one of the shared plugin class.
++ *
++ * @group jsonrpc
++ */
++#[Group('jsonrpc')]
++#[RunTestsInSeparateProcesses]
++final class DerivativeMethodTest extends KernelTestBase {
++
++  /**
++   * {@inheritdoc}
++   */
++  protected static $modules = [
++    'system',
++    'user',
++    'serialization',
++    'jsonrpc',
++    'jsonrpc_discovery',
++    'jsonrpc_test_attributes',
++    'jsonrpc_test_annotations',
++  ];
++
++  /**
++   * {@inheritdoc}
++   */
++  protected function setUp(): void {
++    parent::setUp();
++    $this->installEntitySchema('user');
++    // The test methods require 'access content'; uid 1 has every permission.
++    $this->container()->get('current_user')->setAccount(new UserSession(['uid' => 1]));
++  }
++
++  /**
++   * Every derivative is a supported method with its own definition.
++   */
++  #[DataProvider('baseMethods')]
++  public function testDerivativesAreSupportedMethods(string $base): void {
++    $methods = $this->handler()->supportedMethods();
++
++    $this::assertArrayNotHasKey($base, $methods);
++    $echo = $methods[$base . ':echo'] ?? NULL;
++    $double = $methods[$base . ':double'] ?? NULL;
++    $this::assertInstanceOf(JsonRpcMethodDefinition::class, $echo);
++    $this::assertInstanceOf(JsonRpcMethodDefinition::class, $double);
++
++    $this::assertSame($base . ':echo', $echo->id());
++    $this::assertSame(['text'], array_keys($echo->getParams() ?? []));
++    $this::assertSame(['number'], array_keys($double->getParams() ?? []));
++
++    $this::assertSame('object', $echo->output['type'] ?? NULL);
++    $this::assertSame(['type' => 'integer'], $double->output);
++  }
++
++  /**
++   * A call returns the result, validated against the derivative's schema.
++   */
++  #[DataProvider('baseMethods')]
++  public function testCallUsesDerivativeOutputSchema(string $base): void {
++    [$echo] = $this->handler()->batch([
++      new RpcRequest('2.0', $base . ':echo', FALSE, 1, new ParameterBag(['text' => 'hi'])),
++    ]);
++    $this::assertSame(['echo' => 'hi'], $echo->getResult());
++    $this::assertSame($this->handler()->getMethod($base . ':echo')?->output, $echo->getResultSchema());
++
++    [$double] = $this->handler()->batch([
++      new RpcRequest('2.0', $base . ':double', FALSE, 2, new ParameterBag(['number' => 21])),
++    ]);
++    $this::assertSame(42, $double->getResult());
++    $this::assertSame(['type' => 'integer'], $double->getResultSchema());
++  }
++
++  /**
++   * Over HTTP, the result passes validation against the derivative schema.
++   *
++   * The class-level schema says "null", so a result that is only checked
++   * against it would be rejected with an internal error.
++   */
++  #[DataProvider('baseMethods')]
++  public function testHttpCall(string $base): void {
++    $body = $this->post([
++      'jsonrpc' => '2.0',
++      'id' => 1,
++      'method' => $base . ':echo',
++      'params' => ['text' => 'hello'],
++    ]);
++    $this::assertSame(['echo' => 'hello'], $body['result'] ?? NULL);
++
++    $body = $this->post([
++      'jsonrpc' => '2.0',
++      'id' => 1,
++      'method' => $base . ':double',
++      'params' => ['number' => 'not a number'],
++    ]);
++    $this::assertSame(-32602, $body['error']['code'] ?? NULL);
++  }
++
++  /**
++   * Invalidating the cache tag picks up a changed set of derivatives.
++   */
++  public function testCacheTagRefreshesDerivatives(): void {
++    $state = $this->container()->get('state');
++    $this::assertTrue($this->handler()->supportsMethod('derived.test.attributes:echo'));
++
++    $state->set(DerivedMethodDeriver::STATE_KEY, ['echo', 'double', 'extra']);
++    // The definitions are cached, so the change is not visible yet.
++    $this::assertFalse($this->handler()->supportsMethod('derived.test.attributes:extra'));
++
++    Cache::invalidateTags(['jsonrpc_plugins']);
++    $this::assertTrue($this->handler()->supportsMethod('derived.test.attributes:extra'));
++    $this::assertSame(['type' => 'string'], $this->handler()->getMethod('derived.test.attributes:extra')?->output);
++
++    $state->set(DerivedMethodDeriver::STATE_KEY, ['double']);
++    Cache::invalidateTags(['jsonrpc_plugins']);
++    $this::assertFalse($this->handler()->supportsMethod('derived.test.attributes:echo'));
++    $this::assertFalse($this->handler()->supportsMethod('derived.test.attributes:extra'));
++    $this::assertTrue($this->handler()->supportsMethod('derived.test.attributes:double'));
++  }
++
++  /**
++   * Methods without a deriver still get the class-level output schema.
++   */
++  public function testNonDerivedMethodsKeepClassOutputSchema(): void {
++    foreach (['first.test.attributes', 'first.test.annotations'] as $id) {
++      $method = $this->handler()->getMethod($id);
++      $this::assertNotNull($method);
++      $this::assertSame(['type' => 'number'], $method->output);
++    }
++  }
++
++  /**
++   * The deriver class is not part of the discovery output.
++   */
++  public function testDiscoveryOmitsDeriver(): void {
++    $serializer = $this->container()->get('serializer');
++    $method = $this->handler()->getMethod('derived.test.attributes:echo');
++    $normalized = $serializer->normalize($method, 'json');
++    $this::assertIsArray($normalized);
++    $this::assertSame('derived.test.attributes:echo', $normalized['id']);
++    $this::assertArrayNotHasKey('deriver', $normalized['attributes']);
++    $this::assertArrayHasKey('output', $normalized['attributes']);
++
++    // A base definition that names its deriver does not leak it either.
++    $base = new JsonRpcMethodDefinition([
++      'id' => 'derived.test.attributes',
++      'deriver' => DerivedMethodDeriver::class,
++    ]);
++    $this::assertSame(DerivedMethodDeriver::class, $base->getDeriver());
++    $normalized = $serializer->normalize($base, 'json');
++    $this::assertIsArray($normalized);
++    $this::assertArrayNotHasKey('deriver', $normalized['attributes']);
++  }
++
++  /**
++   * Provides the base method IDs, one per discovery mechanism.
++   */
++  public static function baseMethods(): array {
++    return [
++      'attribute' => ['derived.test.attributes'],
++      'annotation' => ['derived.test.annotations'],
++    ];
++  }
++
++  /**
++   * Posts a JSON-RPC payload to the controller and decodes the body.
++   *
++   * @param array<mixed> $payload
++   *   A call.
++   *
++   * @return array<mixed>
++   *   The decoded response body.
++   */
++  private function post(array $payload): array {
++    $request = Request::create('/jsonrpc', 'POST', content: Json::encode($payload));
++    $stack = $this->container()->get('request_stack');
++    $stack->push($request);
++    try {
++      $response = HttpController::create($this->container())->resolve($request);
++    }
++    finally {
++      $stack->pop();
++    }
++    $this::assertInstanceOf(Response::class, $response);
++    $content = $response->getContent();
++    $this::assertIsString($content);
++    $body = Json::decode($content);
++    $this::assertIsArray($body);
++    return $body;
++  }
++
++  /**
++   * Gets the JSON-RPC handler.
++   */
++  private function handler(): HandlerInterface {
++    $handler = $this->container()->get('jsonrpc.handler');
++    $this::assertInstanceOf(HandlerInterface::class, $handler);
++    return $handler;
++  }
++
++  /**
++   * Gets the test container.
++   */
++  private function container(): ContainerBuilder {
++    $this::assertInstanceOf(ContainerBuilder::class, $this->container);
++    return $this->container;
++  }
++
++}
+-- 
+2.50.1 (Apple Git-155)
+

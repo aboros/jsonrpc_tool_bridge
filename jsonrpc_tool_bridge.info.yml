@@ -1,0 +1,9 @@
+name: 'JSON-RPC Tool Bridge'
+type: module
+description: 'Exposes Drupal Tool API tools as JSON-RPC 2.0 methods via JsonRpcToolConfig entities.'
+package: 'Web services'
+core_version_requirement: ^10.5 || ^11
+dependencies:
+  - jsonrpc:jsonrpc
+  - tool:tool (>=1.0.0-beta8)
+  - drupal:serialization

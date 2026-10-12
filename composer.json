@@ -1,0 +1,16 @@
+{
+  "name": "drupal/jsonrpc_tool_bridge",
+  "type": "drupal-module",
+  "description": "Exposes Drupal Tool API tools as JSON-RPC 2.0 methods via jsonrpc_tool_config entities.",
+  "license": "GPL-2.0-or-later",
+  "require": {
+    "php": "^8.3",
+    "drupal/jsonrpc": "^3.0",
+    "drupal/tool": "^1.0.0-beta8"
+  },
+  "autoload": {
+    "psr-4": {
+      "Drupal\\jsonrpc_tool_bridge\\": "src/"
+    }
+  }
+}

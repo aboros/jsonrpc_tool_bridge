@@ -1,0 +1,39 @@
+entity.jsonrpc_tool_config.collection:
+  path: '/admin/config/services/jsonrpc/tools'
+  defaults:
+    _entity_list: 'jsonrpc_tool_config'
+    _title: 'JSON-RPC Tool Configurations'
+  requirements:
+    _permission: 'administer jsonrpc tool configurations'
+
+entity.jsonrpc_tool_config.add_form:
+  path: '/admin/config/services/jsonrpc/tools/add'
+  defaults:
+    _entity_form: 'jsonrpc_tool_config.add'
+    _title: 'Add JSON-RPC Tool Configuration'
+  requirements:
+    _permission: 'administer jsonrpc tool configurations'
+
+entity.jsonrpc_tool_config.edit_form:
+  path: '/admin/config/services/jsonrpc/tools/{jsonrpc_tool_config}/edit'
+  defaults:
+    _entity_form: 'jsonrpc_tool_config.edit'
+    _title: 'Edit JSON-RPC Tool Configuration'
+  requirements:
+    _permission: 'administer jsonrpc tool configurations'
+
+entity.jsonrpc_tool_config.delete_form:
+  path: '/admin/config/services/jsonrpc/tools/{jsonrpc_tool_config}/delete'
+  defaults:
+    _entity_form: 'jsonrpc_tool_config.delete'
+    _title: 'Delete JSON-RPC Tool Configuration'
+  requirements:
+    _permission: 'administer jsonrpc tool configurations'
+
+jsonrpc_tool_bridge.tool_autocomplete:
+  path: '/admin/config/services/jsonrpc/tools/autocomplete'
+  defaults:
+    _controller: '\Drupal\jsonrpc_tool_bridge\Controller\ToolAutocompleteController::handleAutocomplete'
+  requirements:
+    _permission: 'administer jsonrpc tool configurations'
+  methods: [GET]

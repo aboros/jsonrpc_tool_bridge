@@ -1,0 +1,7 @@
+administer jsonrpc tool configurations:
+  title: 'Administer JSON-RPC tool configurations'
+  description: 'Manage which Tool API tools are exposed as JSON-RPC methods'
+  restrict access: true
+access jsonrpc tool bridge:
+  title: 'Call Tool API tools over JSON-RPC'
+  description: 'Call the tool_api:* JSON-RPC methods. Each tool still checks its own access, and the JSON-RPC endpoint also requires "Use JSON-RPC services".'

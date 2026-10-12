@@ -1,0 +1,8 @@
+name: 'JSON-RPC Tool Bridge Test Fixtures'
+type: module
+description: 'Provides drupal/tool fixtures for jsonrpc_tool_bridge testing'
+package: Testing
+core_version_requirement: ^10.5 || ^11
+dependencies:
+  - tool:tool
+hidden: true

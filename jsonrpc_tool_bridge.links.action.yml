@@ -1,0 +1,5 @@
+jsonrpc_tool_bridge.tool_config_add:
+  route_name: entity.jsonrpc_tool_config.add_form
+  title: 'Add JSON-RPC tool configuration'
+  appears_on:
+    - entity.jsonrpc_tool_config.collection

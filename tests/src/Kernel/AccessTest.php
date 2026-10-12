@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\jsonrpc_tool_bridge\Kernel;
 
 use Drupal\KernelTests\KernelTestBase;
+use Drupal\jsonrpc\JsonRpcObject\Error;
 use Drupal\Tests\jsonrpc_tool_bridge\Traits\ToolApiTestTrait;
 use Drupal\Tests\user\Traits\UserCreationTrait;
 use PHPUnit\Framework\Attributes\Group;
@@ -15,7 +16,8 @@ use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
  *
  * The method permission is checked by jsonrpc and denied with a JSON-RPC
  * error, as mcp_server denies a client without "access mcp server". The tool's
- * own access() is checked by ToolApi and denied with an isError envelope.
+ * own access() is checked by ToolApi and denied with the same error code,
+ * with the tool's reason as the data.
  *
  * @group jsonrpc_tool_bridge
  */
@@ -66,7 +68,7 @@ final class AccessTest extends KernelTestBase {
   }
 
   /**
-   * With the bridge permission, a tool's own denial is an isError result.
+   * With the bridge permission, a tool's own denial is an invalid request.
    */
   public function testToolAccessDenialIsAnErrorEnvelope(): void {
     $this->setCurrentUser($this->createUser(['use jsonrpc services', 'access jsonrpc tool bridge']));
@@ -74,16 +76,16 @@ final class AccessTest extends KernelTestBase {
 
     $body = $this->callOverHttp('denied', []);
 
-    $this->assertSame('Tool plugin access denied: Denied by design.', $this->assertToolFailed($body['result']));
+    $this->assertSame('Tool plugin access denied: Denied by design.', $this->assertErrorResponse($body, Error::INVALID_REQUEST));
     $this->assertSuccessfulCall($this->callOverHttp('example', ['message' => 'hi']));
   }
 
   /**
-   * Asserts a call returned a successful envelope.
+   * Asserts a call returned a result.
    */
   private function assertSuccessfulCall(array $body): void {
     $this->assertArrayHasKey('result', $body, $this->lastResponseJson);
-    $this->assertToolSucceeded($body['result']);
+    $this->assertSame(['result' => 'Echo: hi'], $body['result']);
   }
 
 }

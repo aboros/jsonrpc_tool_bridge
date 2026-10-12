@@ -67,7 +67,6 @@ final class DiscoveryTest extends KernelTestBase {
       $this->assertSame('tool_api:' . $config_id, $normalized['id']);
       $this->assertArrayNotHasKey('deriver', $normalized['attributes']);
       $this->assertSame('object', $normalized['attributes']['output']['type']);
-      $this->assertArrayHasKey('isError', $normalized['attributes']['output']['properties']);
     }
 
     $example = json_decode($serializer->serialize($this->handler()->getMethod('tool_api:example'), 'json'), TRUE, 512, JSON_THROW_ON_ERROR);
@@ -77,6 +76,9 @@ final class DiscoveryTest extends KernelTestBase {
     // Empty maps stay objects in the advertised output schema.
     $empty_maps = $serializer->serialize($this->handler()->getMethod('tool_api:empty_maps'), 'json');
     $this->assertStringNotContainsString('"properties":[]', $empty_maps);
+    // The output schema is the tool's own, with its outputs as properties.
+    $output = json_decode($empty_maps, TRUE, 512, JSON_THROW_ON_ERROR)['attributes']['output'];
+    $this->assertSame(['settings', 'entries', 'document'], array_keys($output['properties']));
   }
 
 }

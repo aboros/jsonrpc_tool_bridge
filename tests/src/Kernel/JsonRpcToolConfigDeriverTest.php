@@ -152,8 +152,7 @@ final class JsonRpcToolConfigDeriverTest extends KernelTestBase {
     $this->bridge('underscored', 'jsonrpc_tool_test___example');
 
     $this->assertSame(['message', 'prefix', 'count'], array_keys($this->method('tool_api:underscored')->getParams()));
-    $result = $this->execute('underscored', ['message' => 'hi']);
-    $this->assertSame(['result' => 'Echo: hi'], $this->assertToolSucceeded($result));
+    $this->assertSame(['result' => 'Echo: hi'], $this->callResult('underscored', ['message' => 'hi']));
   }
 
   /**

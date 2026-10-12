@@ -137,7 +137,7 @@ final class JsonRpcToolConfigDeriver extends DeriverBase implements ContainerDer
       'usage' => new TranslatableMarkup('@text', ['@text' => $description]),
       'access' => $base_plugin_definition->access,
       'params' => $this->buildParams($this->toolDefinitionSerializer->normalizeInputSchema($tool)),
-      'output' => ToolApi::envelopeSchema($this->buildOutputSchema($tool)),
+      'output' => $this->buildOutputSchema($tool),
     ]);
   }
 
@@ -170,7 +170,7 @@ final class JsonRpcToolConfigDeriver extends DeriverBase implements ContainerDer
    *
    * A tool without inputs gets an empty list rather than NULL: jsonrpc reads
    * NULL as "accepts no parameters" and rejects even an empty params object,
-   * which MCP clients send for such tools.
+   * which JSON-RPC allows and many clients send for such methods.
    *
    * @param array $input_schema
    *   The tool's input schema from ToolDefinitionSerializer.
@@ -194,11 +194,11 @@ final class JsonRpcToolConfigDeriver extends DeriverBase implements ContainerDer
   }
 
   /**
-   * Builds the JSON Schema for the structuredContent ToolApi returns.
+   * Builds the JSON Schema of the result ToolApi returns.
    *
    * The schema describes the tool's outputs keyed by output name, exactly as
-   * ToolApi::execute() sends them. Failures carry no structuredContent, so
-   * the schema does not need to account for them.
+   * ToolApi::execute() returns them. Failures are JSON-RPC errors, so the
+   * schema does not need to account for them.
    *
    * No member is listed as required: Tool API does not enforce that a
    * successful result sets every declared output (tool#3583029), and
@@ -209,13 +209,14 @@ final class JsonRpcToolConfigDeriver extends DeriverBase implements ContainerDer
    * @param \Drupal\tool\Tool\ToolInterface $tool
    *   The invoker-aware tool instance.
    *
-   * @return array|null
-   *   A JSON Schema object, or NULL when the tool declares no outputs.
+   * @return array
+   *   A JSON Schema object. A tool without declared outputs may still pass
+   *   undeclared values through, so its result is any object.
    */
-  private function buildOutputSchema(ToolInterface $tool): ?array {
+  private function buildOutputSchema(ToolInterface $tool): array {
     $outputs = $this->toolDefinitionSerializer->normalizeOutputDefinitions($tool);
     if ($outputs === []) {
-      return NULL;
+      return ToolApi::outputSchema();
     }
     return self::plainSchema([
       'type' => 'object',

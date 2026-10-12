@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\jsonrpc_tool_bridge\Kernel;
 
 use Drupal\KernelTests\KernelTestBase;
+use Drupal\jsonrpc\JsonRpcObject\Error;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
 use Drupal\Tests\jsonrpc_tool_bridge\Traits\ToolApiTestTrait;
@@ -84,22 +85,17 @@ final class EntityHandleIntegrationTest extends KernelTestBase {
 
     $this->bridge('entity_round_trip', 'jsonrpc_tool_test:entity_round_trip');
 
-    $call_result = $this->execute('entity_round_trip', [
+    $result = $this->callResult('entity_round_trip', [
       'entity' => $handle,
       'suffix' => ' [via JSON-RPC]',
     ]);
-    $result = $this->assertToolSucceeded($call_result);
-    $result_message = $this->resultMessage($call_result);
-    $this->assertStringContainsString('Entity processed', $result_message);
 
-    // The output should contain a handle string.
-    $output_handle = $result['processed_entity'] ?? NULL;
+    // The output should contain a handle string, and nothing else: the hint
+    // text Tool API writes for models is not part of a JSON-RPC result.
+    $this->assertSame(['processed_entity'], array_keys($result));
+    $output_handle = $result['processed_entity'];
     $this->assertIsString($output_handle);
     $this->assertStringStartsWith('handle:', $output_handle);
-
-    // The message should contain the entity hint.
-    $this->assertStringContainsString('handle:', $result_message);
-    $this->assertStringContainsString('type: node', $result_message);
 
     // Resolve the output handle — should have the modified title.
     $resolved = $this->handleStore->resolve($output_handle);
@@ -127,12 +123,9 @@ final class EntityHandleIntegrationTest extends KernelTestBase {
 
     $this->bridge('entity_list', 'jsonrpc_tool_test:entity_list');
 
-    $call_result = $this->execute('entity_list', [
+    $result = $this->callResult('entity_list', [
       'entities' => [$handle1, $handle2],
     ]);
-    $result = $this->assertToolSucceeded($call_result);
-    $result_message = $this->resultMessage($call_result);
-    $this->assertStringContainsString('2 entities', $result_message);
 
     // Output should be an array of handle strings.
     $output_handles = $result['results'] ?? NULL;
@@ -143,15 +136,9 @@ final class EntityHandleIntegrationTest extends KernelTestBase {
       $this->assertStringStartsWith('handle:', $h);
     }
 
-    // Should have a batch hint (single instruction, not per-entity).
-    $this->assertStringContainsString(
-      'contains 2 entity handle(s):',
-      $result_message,
-    );
-    $this->assertSame(
-      1,
-      substr_count($result_message, 'Pass these handles'),
-    );
+    // Each handle resolves to the entity it was issued for.
+    $this->assertSame('First', $this->handleStore->resolve($output_handles[0])->label());
+    $this->assertSame('Second', $this->handleStore->resolve($output_handles[1])->label());
   }
 
   /**
@@ -191,18 +178,15 @@ final class EntityHandleIntegrationTest extends KernelTestBase {
     $this->bridge('entity_round_trip', 'jsonrpc_tool_test:entity_round_trip');
 
     $load = $this->callOverHttp('node_load', ['nid' => (int) $node->id()]);
-    $load_result = $this->assertToolSucceeded($load['result']);
-    $handle = $load_result['node'];
+    $handle = $load['result']['node'];
     $this->assertIsString($handle);
     $this->assertStringStartsWith('handle:', $handle);
-    $this->assertStringContainsString('Output `node` entity handle:', $this->resultMessage($load['result']));
 
     $round_trip = $this->callOverHttp('entity_round_trip', [
       'entity' => $handle,
       'suffix' => ' [round trip]',
     ]);
-    $round_trip_result = $this->assertToolSucceeded($round_trip['result']);
-    $resolved = $this->handleStore->resolve($round_trip_result['processed_entity']);
+    $resolved = $this->handleStore->resolve($round_trip['result']['processed_entity']);
     $this->assertInstanceOf(Node::class, $resolved);
     $this->assertSame('Loaded [round trip]', $resolved->getTitle());
   }
@@ -224,8 +208,8 @@ final class EntityHandleIntegrationTest extends KernelTestBase {
     $handle = $this->handleStore->store($node);
 
     $this->setCurrentUser($this->createUser(['access jsonrpc tool bridge']));
-    $message = $this->assertToolFailed($this->execute('entity_round_trip', ['entity' => $handle]));
-    $this->assertStringContainsString('does not exist or has expired', $message);
+    $error = $this->callError('entity_round_trip', ['entity' => $handle], Error::INVALID_PARAMS);
+    $this->assertStringContainsString('does not exist or has expired', (string) $error->getData());
   }
 
   /**
@@ -234,11 +218,11 @@ final class EntityHandleIntegrationTest extends KernelTestBase {
   public function testNonEntityStringNotResolved(): void {
     $this->bridge('example', 'jsonrpc_tool_test:example');
 
-    $result = $this->assertToolSucceeded($this->execute('example', [
+    $result = $this->callResult('example', [
       'message' => 'handle:not-a-real-handle',
       'prefix' => 'Test',
       'count' => 1,
-    ]));
+    ]);
     $this->assertStringContainsString(
       'handle:not-a-real-handle',
       $result['result'],

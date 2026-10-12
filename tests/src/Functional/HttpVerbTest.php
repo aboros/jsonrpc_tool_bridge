@@ -71,12 +71,14 @@ final class HttpVerbTest extends BrowserTestBase {
     $call = $this->call('quoted_message', ['title' => 'About us']);
 
     $body = $this->decode($this->send('GET', $call, [$account->getAccountName(), $account->passRaw]));
-    $this->assertTrue($body['result']['isError']);
-    $this->assertSame([['type' => 'text', 'text' => 'Tool modifies data and must be called with POST.']], $body['result']['content']);
+    $this->assertArrayNotHasKey('result', $body);
+    $this->assertSame(-32600, $body['error']['code']);
+    $this->assertSame('Tool modifies data and must be called with POST.', $body['error']['data']);
 
-    $body = $this->decode($this->send('POST', $call, [$account->getAccountName(), $account->passRaw]));
-    $this->assertFalse($body['result']['isError']);
-    $this->assertSame('Saved About us.', $body['result']['content'][0]['text']);
+    $response = $this->send('POST', $call, [$account->getAccountName(), $account->passRaw]);
+    $this->assertArrayHasKey('result', $this->decode($response));
+    // The tool has no outputs, so its result is an empty object.
+    $this->assertStringContainsString('"result":{}', (string) $response->getBody());
   }
 
   /**
@@ -89,8 +91,7 @@ final class HttpVerbTest extends BrowserTestBase {
     foreach (['first', 'second'] as $message) {
       $response = $this->send('GET', $this->call('example', ['message' => 'same']), $auth);
       $body = $this->decode($response);
-      $this->assertFalse($body['result']['isError'], $message);
-      $this->assertSame(['result' => 'Echo: same'], $body['result']['structuredContent']);
+      $this->assertSame(['result' => 'Echo: same'], $body['result'], $message);
       $this->assertStringStartsWith('UNCACHEABLE', $response->getHeaderLine('X-Drupal-Dynamic-Cache'));
     }
   }
@@ -107,7 +108,7 @@ final class HttpVerbTest extends BrowserTestBase {
 
     foreach (['first', 'second'] as $attempt) {
       $response = $this->send('GET', $call);
-      $this->assertFalse($this->decode($response)['result']['isError'], $attempt);
+      $this->assertSame(['result' => 'Echo: anonymous'], $this->decode($response)['result'], $attempt);
       $this->assertNotSame('HIT', $response->getHeaderLine('X-Drupal-Cache'), $attempt);
     }
   }
@@ -156,7 +157,7 @@ final class HttpVerbTest extends BrowserTestBase {
   }
 
   /**
-   * Decodes a successful JSON-RPC response.
+   * Decodes a JSON-RPC response sent with HTTP status 200.
    *
    * @return array<string, mixed>
    *   The decoded body.
@@ -166,7 +167,6 @@ final class HttpVerbTest extends BrowserTestBase {
     $this->assertSame(200, $response->getStatusCode(), $content);
     $body = Json::decode($content);
     $this->assertIsArray($body);
-    $this->assertArrayHasKey('result', $body, $content);
     return $body;
   }
 

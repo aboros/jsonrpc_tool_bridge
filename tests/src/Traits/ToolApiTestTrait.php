@@ -8,6 +8,7 @@ use Drupal\Component\Serialization\Json;
 use Drupal\Core\Routing\RouteObjectInterface;
 use Drupal\jsonrpc\Controller\HttpController;
 use Drupal\jsonrpc\HandlerInterface;
+use Drupal\jsonrpc\JsonRpcObject\Error;
 use Drupal\jsonrpc\JsonRpcObject\ParameterBag;
 use Drupal\jsonrpc\JsonRpcObject\Request as RpcRequest;
 use Drupal\jsonrpc\JsonRpcObject\Response as RpcResponse;
@@ -16,13 +17,10 @@ use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Calls bridged tools and reads the envelope ToolApi::execute() returns.
+ * Calls bridged tools and reads the JSON-RPC responses.
  *
- * The envelope has the shape of an MCP CallToolResult. The message is always
- * the first text block. A success carries its outputs as structuredContent
- * and mirrors them as JSON in a second block. A failure has no
- * structuredContent and echoes the input schema in a second block when a
- * corrected retry could succeed.
+ * A successful call has the tool's outputs as its result. A failed call is a
+ * JSON-RPC error whose data is the failure message.
  */
 trait ToolApiTestTrait {
 
@@ -75,12 +73,11 @@ trait ToolApiTestTrait {
     $this->assertCount(1, $responses);
     $response = reset($responses);
     $this->assertInstanceOf(RpcResponse::class, $response);
-    $this->assertNull($response->getError(), (string) $response->getError()?->getMessage());
     return $response;
   }
 
   /**
-   * Calls a bridged method and returns the result envelope.
+   * Calls a bridged method, asserts it succeeded, and returns the result.
    *
    * @param string $config_id
    *   The JsonRpcToolConfig ID.
@@ -88,12 +85,34 @@ trait ToolApiTestTrait {
    *   The named parameters.
    *
    * @return array<string, mixed>
-   *   The result envelope.
+   *   The result, decoded the way a client decodes it into an array.
    */
-  protected function execute(string $config_id, array $params = []): array {
-    $result = $this->callMethod($config_id, $params)->getResult();
-    $this->assertIsArray($result);
-    return $result;
+  protected function callResult(string $config_id, array $params = []): array {
+    $response = $this->callMethod($config_id, $params);
+    $this->assertNull($response->getError(), (string) $response->getError()?->getData());
+    $result = $response->getResult();
+    // A result is always an object, even when the tool returned nothing.
+    $this->assertTrue(is_array($result) || $result instanceof \stdClass);
+    return json_decode(json_encode($result, JSON_THROW_ON_ERROR), TRUE, 512, JSON_THROW_ON_ERROR);
+  }
+
+  /**
+   * Calls a bridged method, asserts it failed, and returns the error.
+   *
+   * @param string $config_id
+   *   The JsonRpcToolConfig ID.
+   * @param array<string, mixed> $params
+   *   The named parameters.
+   * @param int|null $code
+   *   The expected error code, or NULL to accept any.
+   */
+  protected function callError(string $config_id, array $params = [], ?int $code = NULL): Error {
+    $error = $this->callMethod($config_id, $params)->getError();
+    $this->assertInstanceOf(Error::class, $error, 'The call did not fail.');
+    if ($code !== NULL) {
+      $this->assertSame($code, $error->getCode(), (string) $error->getData());
+    }
+    return $error;
   }
 
   /**
@@ -153,64 +172,22 @@ trait ToolApiTestTrait {
   }
 
   /**
-   * Returns the message from the first text block.
+   * Asserts a decoded response is an error and returns its data.
    *
-   * @param array<string, mixed> $result
-   *   The result envelope.
+   * @param array<string, mixed> $body
+   *   The decoded JSON-RPC response.
+   * @param int $code
+   *   The expected error code.
+   *
+   * @return string
+   *   The error data.
    */
-  protected function resultMessage(array $result): string {
-    $this->assertNotEmpty($result['content'], 'The result has no content.');
-    $first = $result['content'][0];
-    $this->assertSame('text', $first['type']);
-    return (string) $first['text'];
-  }
-
-  /**
-   * Asserts the result is a success and returns its outputs.
-   *
-   * @param array<string, mixed> $result
-   *   The result envelope.
-   *
-   * @return array<string, mixed>
-   *   The structuredContent, or an empty array for a tool without outputs.
-   */
-  protected function assertToolSucceeded(array $result): array {
-    $this->assertFalse($result['isError'], $this->resultMessage($result));
-    return $result['structuredContent'] ?? [];
-  }
-
-  /**
-   * Asserts the result is a failure and returns its message.
-   *
-   * @param array<string, mixed> $result
-   *   The result envelope.
-   */
-  protected function assertToolFailed(array $result): string {
-    $this->assertTrue($result['isError'], 'The result is not an error.');
-    $this->assertArrayNotHasKey('structuredContent', $result, 'A failure must not carry structuredContent.');
-    return $this->resultMessage($result);
-  }
-
-  /**
-   * Returns the input schema echoed in the second text block, if any.
-   *
-   * @param array<string, mixed> $result
-   *   The result envelope.
-   *
-   * @return array<string, mixed>|null
-   *   The decoded JSON Schema, or NULL when the failure echoed none.
-   */
-  protected function echoedInputSchema(array $result): ?array {
-    $block = $result['content'][1] ?? NULL;
-    if ($block === NULL) {
-      return NULL;
-    }
-    $this->assertSame('text', $block['type']);
-    $text = (string) $block['text'];
-    $this->assertStringStartsWith("Input schema:\n", $text);
-    $schema = json_decode(substr($text, strlen("Input schema:\n")), TRUE, 512, JSON_THROW_ON_ERROR);
-    $this->assertIsArray($schema);
-    return $schema;
+  protected function assertErrorResponse(array $body, int $code): string {
+    $this->assertArrayNotHasKey('result', $body, $this->lastResponseJson);
+    $this->assertArrayHasKey('error', $body, $this->lastResponseJson);
+    $this->assertSame($code, $body['error']['code'], $this->lastResponseJson);
+    $this->assertIsString($body['error']['data']);
+    return $body['error']['data'];
   }
 
 }

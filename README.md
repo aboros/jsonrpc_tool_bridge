@@ -5,10 +5,10 @@ methods through `drupal/jsonrpc`. A `JsonRpcToolConfig` config entity maps a
 Tool API tool to a method name, and a plugin deriver emits one `tool_api`
 method derivative per enabled mapping.
 
-It behaves like `drupal/mcp_server_tool_bridge`: the same mapping model, the
-same execution flow, the same result shape and the same entity handle
-handling. A client that already handles the MCP bridge's results can handle
-these too. The differences are listed below.
+It is modelled on `drupal/mcp_server_tool_bridge`: the same mapping model,
+the same execution flow and the same entity handle handling. Responses are
+plain JSON-RPC: a successful call returns the tool's outputs as the result,
+and a failed one is a JSON-RPC error. The differences are listed below.
 
 ## Requirements
 
@@ -66,7 +66,8 @@ apply it with `cweagans/composer-patches`:
 | `administer jsonrpc tool configurations` | Manage the mappings. Restricted. |
 
 Each tool also runs its own `access()` check, exactly as over MCP. A denial
-there is a result with `isError: true`, not a JSON-RPC error.
+there is the same *Invalid Request* error, with the tool's reason as the
+data.
 
 Which authentication providers the endpoint accepts (basic auth, cookie,
 OAuth2, JWT) is configured on jsonrpc's own settings page.
@@ -93,38 +94,37 @@ method with its usage, parameters and output schema.
 
 ### Results
 
-Every outcome of running the tool is a JSON-RPC **result** with the shape of an
-MCP `CallToolResult`:
+A successful call returns the tool's outputs, keyed by output name, as the
+JSON-RPC `result`, and nothing else:
 
 ```json
-{
-  "content": [
-    {"type": "text", "text": "Successfully processed message 1 time(s)"},
-    {"type": "text", "text": "{\n    \"result\": \"Echo: hi\"\n}"}
-  ],
-  "isError": false,
-  "structuredContent": {"result": "Echo: hi"}
-}
+{"jsonrpc": "2.0", "id": 1, "result": {"result": "Echo: hi"}}
 ```
 
-- `content[0]` is always the message, with hints appended (for example entity
-  handle hints).
-- On success, `structuredContent` holds the tool's outputs, and `content[1]`
-  mirrors them as pretty-printed JSON. A tool without outputs sends only the
-  message.
-- On failure, `isError` is `true`, there is no `structuredContent`, and when a
-  retry with different arguments could succeed (an input failure),
-  `content[1]` echoes the input schema as `Input schema:\n{...}`. Access
-  denials and runtime failures do not echo it.
+A tool that returns no outputs has the result `{}`. The result message and
+hints Tool API writes for models are not sent.
 
-Each method's output schema is this envelope, with the tool's outputs as the
-`structuredContent` schema. jsonrpc validates every result against it.
+Each method's output schema is its tool's output schema (any object for a tool
+without declared outputs), and jsonrpc validates every result against it.
 
-JSON-RPC **errors** are only used for problems outside the tool, as MCP does:
-an unknown method (-32601), parameters that do not match their schema or a
-missing required parameter (-32602), and a missing `access jsonrpc tool
-bridge` permission (-32600). jsonrpc keeps a generic `message` and puts the
-detail in `error.data`.
+### Errors
+
+Every failure is a JSON-RPC **error**. The code follows the Tool API failure
+category, using the codes jsonrpc itself uses; `message` is the generic text
+for the code and `data` is the detail:
+
+| Code | When | `data` |
+|---|---|---|
+| -32602 Invalid params | A parameter does not match its schema or a required one is missing (checked by jsonrpc); the tool's input validation fails; an entity handle is malformed, unknown or expired; the tool reports an input failure. | The violation or failure message. |
+| -32600 Invalid request | The caller lacks `access jsonrpc tool bridge` (checked by jsonrpc); the tool's own `access()` denies; a modifying tool is called over GET. | The reason, e.g. `Tool plugin access denied: <reason>`. |
+| -32603 Internal error | The tool reports a runtime failure; the bridge catches an unexpected exception. | The tool's failure message. For an exception the bridge catches, the message only when the site displays errors, as for any other JSON-RPC method. |
+| -32601 Method not found | The method does not exist, or its configuration was removed or disabled. | The method name. |
+
+Tool API's input schema is not echoed in errors: it is in the method's
+parameters, available through `jsonrpc_discovery`.
+
+The server does not reply to a notification, whether it succeeds or fails, but
+the tool still runs.
 
 ### HTTP verbs and caching
 
@@ -132,8 +132,8 @@ jsonrpc accepts every method over POST and over GET (`?query=<json>`), and
 caches GET responses. This module:
 
 - refuses tools whose Tool API operation modifies data (`isModifying()`) when
-  the endpoint is called over GET, with an `isError` result reading
-  `Tool modifies data and must be called with POST.`;
+  the endpoint is called over GET, with an *Invalid Request* error whose data
+  reads `Tool modifies data and must be called with POST.`;
 - marks every bridged response uncacheable (`max-age: 0`, and the page cache
   kill switch for anonymous requests), whichever verb carried it.
 
@@ -159,6 +159,11 @@ anonymous users, by their session). So:
 
 ## Differences from the MCP bridge
 
+- **Native results and errors.** MCP returns a `CallToolResult` for every
+  tool outcome: text content blocks with the message and hints, `isError`,
+  and the outputs as `structuredContent`. This module returns the outputs
+  alone as the result and every failure as a JSON-RPC error, without the
+  message, the hints or the input schema echo.
 - **No progress or client gateway.** JSON-RPC has no channel back to the
   client, so tools implementing `ClientGatewayAwareInterface` get no gateway.
 - **The GET rule** above. MCP is POST only.
@@ -167,7 +172,9 @@ anonymous users, by their session). So:
   effect, through the GET rule.
 - **Unknown parameters are ignored.** jsonrpc only reads declared
   parameters, while the MCP input schema sets `additionalProperties: false`.
-- **Error detail** is in `error.data`, not in `error.message`.
+- **Error detail** is in `error.data`, not in `error.message`, and the detail
+  of an exception the bridge catches is hidden unless the site displays
+  errors.
 - **Empty `properties`** members are left out of the advertised schemas, so
   that `jsonrpc_discovery` cannot serialize them as `[]`. An empty
   `properties` constrains nothing, so the schemas mean the same.
@@ -178,8 +185,10 @@ anonymous users, by their session). So:
 
 ## Development
 
-The tests include a parity test that runs the same calls through both bridges.
-It is skipped unless `drupal/mcp_server_tool_bridge` is installed.
+The tests include a parity test that runs the same calls through both bridges
+and checks that a success returns the same outputs and a failure maps to the
+expected error. It is skipped unless `drupal/mcp_server_tool_bridge` is
+installed.
 
 ```bash
 vendor/bin/phpunit -c phpunit.xml web/modules/contrib/jsonrpc_tool_bridge

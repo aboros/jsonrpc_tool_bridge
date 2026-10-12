@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\jsonrpc_tool_bridge\Kernel;
 
 use Drupal\KernelTests\KernelTestBase;
+use Drupal\jsonrpc\JsonRpcObject\Error;
 use Drupal\jsonrpc_tool_bridge\Plugin\jsonrpc\Method\ToolApi;
 use Drupal\node\Entity\Node;
 use Drupal\node\Entity\NodeType;
@@ -17,9 +18,9 @@ use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 /**
  * Tests the output schema bridged methods advertise and that results honor it.
  *
- * Each method advertises the result envelope, with the tool's outputs as the
- * structuredContent schema. jsonrpc validates every result against it, so a
- * result that broke the schema would turn into an internal error.
+ * Each method's output schema is its tool's, describing the outputs keyed by
+ * name. jsonrpc validates every result against it, so a result that broke
+ * the schema would turn into an internal error.
  *
  * Ported from mcp_server_tool_bridge's ToolApiOutputSchemaTest.
  *
@@ -62,33 +63,32 @@ final class ToolApiOutputSchemaTest extends KernelTestBase {
   }
 
   /**
-   * A tool with declared outputs advertises them as structuredContent.
+   * A tool with declared outputs advertises them as the output schema.
    */
   public function testOutputSchemaDescribesOutputs(): void {
     $this->bridge('greeting', 'greeting_tool');
     $schema = $this->getOutputSchema('greeting');
 
-    $this->assertSame(['content', 'isError'], $schema['required']);
-    $structured = $schema['properties']['structuredContent'];
-    $this->assertSame(['type', 'properties'], array_keys($structured));
-    $this->assertSame('object', $structured['type']);
-    $this->assertSame('string', $structured['properties']['message']['type']);
+    $this->assertSame(['type', 'properties'], array_keys($schema));
+    $this->assertSame('object', $schema['type']);
+    $this->assertSame('string', $schema['properties']['message']['type']);
     $this->assertSame(
       'Message: The generated greeting message.',
-      $structured['properties']['message']['description'],
+      $schema['properties']['message']['description'],
     );
-    $this->assertSame(ToolApi::envelopeSchema($structured), $schema);
   }
 
   /**
-   * A tool without declared outputs leaves structuredContent undescribed.
+   * A tool without declared outputs advertises any object.
+   *
+   * Such a tool may still pass undeclared values through, and returns an
+   * empty object otherwise.
    */
-  public function testToolWithoutOutputsHasNoStructuredContentSchema(): void {
+  public function testToolWithoutOutputsAdvertisesAnyObject(): void {
     $this->bridge('no_args', 'jsonrpc_tool_test:no_input');
-    $schema = $this->getOutputSchema('no_args');
 
-    $this->assertArrayNotHasKey('structuredContent', $schema['properties']);
-    $this->assertSame(ToolApi::outputSchema(), $schema);
+    $this->assertSame(['type' => 'object'], $this->getOutputSchema('no_args'));
+    $this->assertSame(ToolApi::outputSchema(), $this->getOutputSchema('no_args'));
   }
 
   /**
@@ -102,36 +102,30 @@ final class ToolApiOutputSchemaTest extends KernelTestBase {
     $response = $this->callMethod('greeting', ['name' => 'Ada']);
 
     $this->assertSame($this->getOutputSchema('greeting'), $response->getResultSchema());
-    $result = $response->getResult();
-    $outputs = $this->assertToolSucceeded($result);
-    $this->assertSame('Hello, Ada!', $outputs['message']);
+    $result = $this->callResult('greeting', ['name' => 'Ada']);
+    $this->assertSame('Hello, Ada!', $result['message']);
     $this->assertValidatesAgainstOutputSchema('greeting', $result);
   }
 
   /**
-   * An access denial carries no structuredContent for the schema to bind.
+   * An access denial is an error, so there is no result for the schema.
    */
-  public function testAccessDeniedResultHasNoStructuredContent(): void {
+  public function testAccessDeniedHasNoResult(): void {
     $this->bridge('denied', 'jsonrpc_tool_test:access_denied');
-    $this->assertArrayHasKey('structuredContent', $this->getOutputSchema('denied')['properties']);
+    $this->assertArrayHasKey('secret', $this->getOutputSchema('denied')['properties']);
 
-    $result = $this->execute('denied');
+    $error = $this->callError('denied', [], Error::INVALID_REQUEST);
 
-    $this->assertStringStartsWith('Tool plugin access denied', $this->assertToolFailed($result));
-    $this->assertNull($this->echoedInputSchema($result));
-    $this->assertValidatesAgainstOutputSchema('denied', $result);
+    $this->assertStringStartsWith('Tool plugin access denied', (string) $error->getData());
   }
 
   /**
-   * A correctable failure echoes the input schema outside structuredContent.
+   * An input failure is an invalid params error, not a result.
    */
-  public function testInputFailureEchoesInputSchemaAsText(): void {
+  public function testInputFailureIsInvalidParams(): void {
     $this->bridge('greeting', 'greeting_tool');
-    $result = $this->execute('greeting');
 
-    $this->assertToolFailed($result);
-    $this->assertArrayHasKey('name', $this->echoedInputSchema($result)['properties']);
-    $this->assertValidatesAgainstOutputSchema('greeting', $result);
+    $this->callError('greeting', [], Error::INVALID_PARAMS);
   }
 
   /**
@@ -145,7 +139,7 @@ final class ToolApiOutputSchemaTest extends KernelTestBase {
     $this->bridge('entity_list', 'jsonrpc_tool_test:entity_list');
     $schema = $this->getOutputSchema('entity_list');
 
-    $results = $schema['properties']['structuredContent']['properties']['results'];
+    $results = $schema['properties']['results'];
     $this->assertSame('array', $results['type']);
     $this->assertSame('string', $results['items']['type']);
     $this->assertStringContainsString('handle', $results['items']['description']);
@@ -154,10 +148,9 @@ final class ToolApiOutputSchemaTest extends KernelTestBase {
     $node->save();
     $handle = $this->container->get('tool.handle_store')->store($node);
 
-    $result = $this->execute('entity_list', ['entities' => [$handle]]);
-    $outputs = $this->assertToolSucceeded($result);
+    $result = $this->callResult('entity_list', ['entities' => [$handle]]);
 
-    $this->assertStringStartsWith('handle:', $outputs['results'][0]);
+    $this->assertStringStartsWith('handle:', $result['results'][0]);
     $this->assertValidatesAgainstOutputSchema('entity_list', $result);
   }
 

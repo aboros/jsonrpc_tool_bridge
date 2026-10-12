@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Drupal\Tests\jsonrpc_tool_bridge\Kernel;
 
 use Drupal\KernelTests\KernelTestBase;
+use Drupal\jsonrpc\JsonRpcObject\Error;
 use Drupal\jsonrpc\JsonRpcMethodDefinition;
 use Drupal\Tests\jsonrpc_tool_bridge\Traits\ToolApiTestTrait;
 use Drupal\Tests\user\Traits\UserCreationTrait;
@@ -140,14 +141,14 @@ final class ToolApiRegistrationTest extends KernelTestBase {
    * pattern, modifiers included, still governs what the tool accepts.
    */
   private function assertRegexConstraintsEnforcedAtRuntime(): void {
-    $this->assertToolSucceeded($this->execute('regex_tool', self::VALID_REGEX_INPUT));
+    $this->callResult('regex_tool', self::VALID_REGEX_INPUT);
     foreach (['username' => 'invalid!@#', 'code' => 'abc-xyz', 'path' => 'no-leading-slash'] as $name => $value) {
-      $message = $this->assertToolFailed($this->execute('regex_tool', [$name => $value] + self::VALID_REGEX_INPUT));
+      $message = (string) $this->callError('regex_tool', [$name => $value] + self::VALID_REGEX_INPUT, Error::INVALID_PARAMS)->getData();
       $this->assertStringContainsString($name, $message);
     }
     // The "i" modifier is dropped from the schema but still honoured by the
     // tool, so the advertised pattern is stricter than the server-side one.
-    $this->assertToolSucceeded($this->execute('regex_tool', ['code' => 'abc-123'] + self::VALID_REGEX_INPUT));
+    $this->callResult('regex_tool', ['code' => 'abc-123'] + self::VALID_REGEX_INPUT);
   }
 
 }

@@ -8,6 +8,7 @@ use Drupal\Core\StringTranslation\TranslatableMarkup;
 use Drupal\KernelTests\KernelTestBase;
 use Drupal\jsonrpc\HandlerInterface;
 use Drupal\jsonrpc\JsonRpcMethodDefinition;
+use Drupal\jsonrpc\JsonRpcObject\Error;
 use Drupal\jsonrpc\JsonRpcObject\ParameterBag;
 use Drupal\jsonrpc\JsonRpcObject\Request as RpcRequest;
 use Drupal\jsonrpc_tool_bridge\Plugin\jsonrpc\Method\ToolApi;
@@ -17,12 +18,13 @@ use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
- * Tests the failure results returned by ToolApi::execute().
+ * Tests the errors ToolApi::execute() returns for failed tool calls.
  *
- * Invalid input must surface violation detail with the input schema echoed,
- * distinct from genuine access denials, so clients can self-correct their
- * arguments (Tool API #3582961 fails access() closed on invalid input, which
- * would otherwise mask validation failures as permission problems).
+ * The error code follows the Tool API failure category. Invalid input must be
+ * reported as invalid params with the violation detail, distinct from genuine
+ * access denials, so clients can fix their parameters (Tool API #3582961
+ * fails access() closed on invalid input, which would otherwise mask
+ * validation failures as permission problems).
  *
  * Ported from mcp_server_tool_bridge's ToolApiFailureResultTest.
  *
@@ -61,9 +63,9 @@ final class ToolApiFailureResultTest extends KernelTestBase {
   }
 
   /**
-   * Tests a missing tool ID returns an error envelope without input schema.
+   * Tests a derivative without a backing config entity is not found.
    */
-  public function testMissingToolIdIsAnError(): void {
+  public function testMissingToolIdIsMethodNotFound(): void {
     $definition = new JsonRpcMethodDefinition([
       'id' => 'tool_api:missing_tool_id',
       'class' => ToolApi::class,
@@ -74,94 +76,115 @@ final class ToolApiFailureResultTest extends KernelTestBase {
       HandlerInterface::JSONRPC_REQUEST_KEY => new RpcRequest('2.0', 'tool_api:missing_tool_id', FALSE, 1),
     ], 'tool_api:missing_tool_id', $definition);
 
-    $result = $plugin->execute(new ParameterBag([]))->getResult();
+    $error = $plugin->execute(new ParameterBag([]))->getError();
 
-    $this->assertSame('ToolApi derivative is missing its tool_id definition.', $this->assertToolFailed($result));
-    $this->assertNull($this->echoedInputSchema($result));
+    $this->assertInstanceOf(Error::class, $error);
+    $this->assertSame(Error::METHOD_NOT_FOUND, $error->getCode());
+    $this->assertStringContainsString('tool_api:missing_tool_id', (string) $error->getData());
   }
 
   /**
-   * Tests a missing required input fails with violations and the schema.
+   * Tests a missing required input is invalid params with the violations.
    */
-  public function testValidationFailureReportsViolationsAndSchema(): void {
-    $result = $this->executeToolApi('regex_constraint', []);
+  public function testValidationFailureReportsViolations(): void {
+    $data = (string) $this->executeToolApi('regex_constraint', [], Error::INVALID_PARAMS)->getData();
 
-    $message = $this->assertToolFailed($result);
-    $this->assertStringContainsString('Tool plugin execution failed:', $message);
-    $this->assertStringContainsString('username', $message);
-    $schema = $this->echoedInputSchema($result);
-    $this->assertSame('object', $schema['type']);
-    $this->assertArrayHasKey('username', $schema['properties']);
+    $this->assertStringContainsString('Tool plugin execution failed:', $data);
+    $this->assertStringContainsString('username', $data);
   }
 
   /**
-   * Tests a constraint-violating value fails with violations, not a denial.
+   * Tests a constraint-violating value is invalid params, not a denial.
    */
   public function testInvalidValueIsNotReportedAsAccessDenial(): void {
-    $result = $this->executeToolApi('regex_constraint', ['username' => 'not valid!']);
+    $data = (string) $this->executeToolApi('regex_constraint', ['username' => 'not valid!'], Error::INVALID_PARAMS)->getData();
 
-    $message = $this->assertToolFailed($result);
-    $this->assertStringContainsString('Tool plugin execution failed:', $message);
-    $this->assertStringNotContainsString('access denied', $message);
-    $this->assertNotNull($this->echoedInputSchema($result));
+    $this->assertStringContainsString('Tool plugin execution failed:', $data);
+    $this->assertStringNotContainsString('access denied', $data);
   }
 
   /**
-   * Tests a genuine access denial is reported as such, without the schema.
+   * Tests a genuine access denial is an invalid request with the reason.
    *
-   * The reason from AccessResult::forbidden() is surfaced so clients know
-   * why access was denied (#3582989). The schema is omitted (#3582993): a
-   * retry with different arguments cannot fix an access denial.
+   * The jsonrpc module answers a missing method permission with the same
+   * code. The reason from AccessResult::forbidden() is surfaced so clients
+   * know why access was denied (#3582989).
    */
-  public function testAccessDenialReportsDenialWithoutSchema(): void {
-    $result = $this->executeToolApi('access_denied', []);
+  public function testAccessDenialIsInvalidRequest(): void {
+    $error = $this->executeToolApi('access_denied', [], Error::INVALID_REQUEST);
 
-    $this->assertSame('Tool plugin access denied: Denied by design.', $this->assertToolFailed($result));
-    $this->assertNull($this->echoedInputSchema($result));
+    $this->assertSame('Tool plugin access denied: Denied by design.', $error->getData());
   }
 
   /**
-   * Tests a runtime exception from the wrapped tool omits the schema.
+   * Tests a runtime failure reported by the wrapped tool is internal.
    *
    * ThrowingTool's doExecute() throws a \RuntimeException. ToolBase catches
    * it and records a Runtime failure result, so this reaches the bridge
-   * through the formatted result, not the bridge's own catch blocks.
+   * through the formatted result, not the bridge's own catch blocks. The
+   * message is the tool's own, so it is sent.
    */
-  public function testRuntimeExceptionOmitsInputSchema(): void {
-    $result = $this->executeToolApi('throwing', []);
+  public function testRuntimeFailureIsInternalError(): void {
+    $error = $this->executeToolApi('throwing', [], Error::INTERNAL_ERROR);
 
-    $this->assertStringContainsString('RuntimeException', $this->assertToolFailed($result));
-    $this->assertNull($this->echoedInputSchema($result));
+    $this->assertStringContainsString('RuntimeException', (string) $error->getData());
   }
 
   /**
-   * Tests a malformed entity handle keeps the input schema.
+   * Tests an exception caught by the bridge only shows its detail on request.
+   *
+   * ThrowsOnAccessTool throws from checkAccess(), which ToolBase::access()
+   * calls with no try/catch of its own, so it reaches ToolApi's catch block.
+   * As for any other exception in a JSON-RPC method, the message is only
+   * sent when the site displays errors.
+   */
+  public function testCaughtExceptionHidesDetailUnlessErrorsAreShown(): void {
+    $error = $this->executeToolApi('throws_on_access', [], Error::INTERNAL_ERROR);
+    $this->assertSame(Error::$errorMeanings[Error::INTERNAL_ERROR], $error->getData());
+
+    $this->config('system.logging')->set('error_level', ERROR_REPORTING_DISPLAY_ALL)->save();
+    $error = $this->callError('throws_on_access', [], Error::INTERNAL_ERROR);
+    $this->assertSame('Tool plugin execution failed: Simulated failure while checking access', $error->getData());
+  }
+
+  /**
+   * Tests a malformed entity handle is invalid params.
    *
    * Setting the input dispatches the input transform event, which throws a
    * handle exception for a handle-prefixed string with an invalid suffix.
-   * That is an input problem the client can fix, so the schema is kept.
+   * The client can fix it by sending a valid handle.
    *
    * @see \Drupal\tool\Handle\HandleExceptionInterface
    */
-  public function testMalformedHandleKeepsInputSchema(): void {
-    $result = $this->executeToolApi('entity_round_trip', [
-      'entity' => 'handle:not-a-uuid',
-    ]);
+  public function testMalformedHandleIsInvalidParams(): void {
+    $error = $this->executeToolApi('entity_round_trip', ['entity' => 'handle:not-a-uuid'], Error::INVALID_PARAMS);
 
-    $this->assertStringContainsString('Tool plugin execution failed:', $this->assertToolFailed($result));
-    $this->assertSame('object', $this->echoedInputSchema($result)['type']);
+    $this->assertStringContainsString('Tool plugin execution failed:', (string) $error->getData());
   }
 
   /**
-   * Tests successful executions carry the outputs and no input schema echo.
+   * Tests a success returns the outputs as the result.
    */
-  public function testSuccessCarriesOutputsAndNoInputSchema(): void {
-    $result = $this->executeToolApi('example', ['message' => 'hi', 'prefix' => 'Echo', 'count' => 1]);
+  public function testSuccessReturnsOutputs(): void {
+    $this->bridge('example', 'jsonrpc_tool_test:example');
 
-    $outputs = $this->assertToolSucceeded($result);
-    $this->assertSame(['result' => 'Echo: hi'], $outputs);
-    $this->assertCount(2, $result['content']);
-    $this->assertSame($outputs, json_decode((string) $result['content'][1]['text'], TRUE, 512, JSON_THROW_ON_ERROR));
+    $result = $this->callResult('example', [
+      'message' => 'hi',
+      'prefix' => 'Echo',
+      'count' => 1,
+    ]);
+    $this->assertSame(['result' => 'Echo: hi'], $result);
+  }
+
+  /**
+   * Tests a success without outputs returns an empty object.
+   */
+  public function testSuccessWithoutOutputsIsEmptyObject(): void {
+    $this->bridge('quoted_message', 'jsonrpc_tool_test:quoted_message');
+
+    $result = $this->callMethod('quoted_message', ['title' => 'About "us"'])->getResult();
+    $this->assertInstanceOf(\stdClass::class, $result);
+    $this->assertSame('{}', json_encode($result));
   }
 
   /**
@@ -171,10 +194,9 @@ final class ToolApiFailureResultTest extends KernelTestBase {
    * wraps the value in an <em> tag (#3618726).
    */
   public function testViolationMessageIsPlainText(): void {
-    $result = $this->executeToolApi('quoted_message', ['title' => "Team's page"]);
+    $error = $this->executeToolApi('quoted_message', ['title' => "Team's page"], Error::INVALID_PARAMS);
 
-    $message = $this->assertToolFailed($result);
-    $this->assertStringContainsString('Title "Team\'s page" must start with "About".', $message);
+    $this->assertStringContainsString('Title "Team\'s page" must start with "About".', (string) $error->getData());
   }
 
   /**
@@ -184,38 +206,27 @@ final class ToolApiFailureResultTest extends KernelTestBase {
    * is literal text and must not be stripped or decoded (#3618726).
    */
   public function testAccessDenialReasonKeepsLiteralText(): void {
-    $result = $this->executeToolApi('quoted_message', [
+    $error = $this->executeToolApi('quoted_message', [
       'title' => 'About <us> &amp; "team"',
       'locked' => TRUE,
-    ]);
+    ], Error::INVALID_REQUEST);
 
-    $this->assertSame('Tool plugin access denied: About <us> &amp; "team" is locked.', $this->assertToolFailed($result));
+    $this->assertSame('Tool plugin access denied: About <us> &amp; "team" is locked.', $error->getData());
   }
 
   /**
-   * Tests result messages reach the client as plain text (#3618726).
-   */
-  public function testResultMessageIsPlainText(): void {
-    $result = $this->executeToolApi('quoted_message', ['title' => 'About "us"']);
-
-    $this->assertToolSucceeded($result);
-    $this->assertSame('Saved About "us".', $result['content'][0]['text']);
-  }
-
-  /**
-   * Executes a bridged tool through ToolApi with the given arguments.
+   * Executes a bridged tool that is expected to fail.
    *
    * @param string $config_id
    *   The JsonRpcToolConfig ID; also derives the backing tool ID.
    * @param array<string, mixed> $arguments
    *   The JSON-RPC parameters.
-   *
-   * @return array<string, mixed>
-   *   The result envelope.
+   * @param int $code
+   *   The expected error code.
    */
-  private function executeToolApi(string $config_id, array $arguments): array {
+  private function executeToolApi(string $config_id, array $arguments, int $code): Error {
     $this->bridge($config_id, 'jsonrpc_tool_test:' . $config_id);
-    return $this->execute($config_id, $arguments);
+    return $this->callError($config_id, $arguments, $code);
   }
 
 }
